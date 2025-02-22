@@ -1,6 +1,6 @@
 # Description of Work (10 points)
 
-This is new for Project 1. We ask you to include a file called `README.md` that contains a quick description of:
+We ask you to include a file called `README.md` that contains a quick description of:
 
 1. the design choices you made,
 2. any problems you encountered while creating your solution, and
