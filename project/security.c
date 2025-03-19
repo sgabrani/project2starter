@@ -135,7 +135,7 @@ ssize_t input_sec(uint8_t* buf, size_t max_length) {
         
         uint16_t len = serialize_tlv(buf, sh);
         cached_server_hello = sh;
-
+        //print_tlv_bytes(cached_server_hello, len);
         // Generate the salt (Client-Hello || Server-Hello)
         uint8_t salt[cached_client_hello->length + cached_server_hello->length+6]; // Allocate enough space
         uint16_t salt_size = 0;
@@ -175,32 +175,33 @@ ssize_t input_sec(uint8_t* buf, size_t max_length) {
 
             if (read_size > 0) {
                 // Generate IV and encrypt data
-                tlv* iv_tlv = create_tlv(IV);
                 uint8_t iv[IV_SIZE];
-                generate_nonce(iv, IV_SIZE);  // Use the nonce generator for random IV
+                uint8_t ciphertext[read_size + 16];  // Add padding space for PKCS#7
+
+                // Let encrypt_data generate the IV and encrypt the data
+                size_t cipher_size = encrypt_data(iv, ciphertext, plaintext, read_size);
+
+                // Now create the IV TLV with the generated IV
+                tlv* iv_tlv = create_tlv(IV);
                 add_val(iv_tlv, iv, IV_SIZE);
                 add_tlv(data_tlv, iv_tlv);
-                
-                // Encrypt the data
-                uint8_t ciphertext[read_size + 16];  // Add padding space
-                size_t cipher_size = encrypt_data(iv, ciphertext, plaintext, read_size);
-                
-                // Create ciphertext TLV
+
+                // And create the ciphertext TLV with the encrypted data
                 tlv* cipher_tlv = create_tlv(CIPHERTEXT);
                 add_val(cipher_tlv, ciphertext, cipher_size);
                 add_tlv(data_tlv, cipher_tlv);
+
                 
                 // Compute HMAC over IV + Ciphertext
                 tlv* mac_tlv = create_tlv(MAC);
-                uint8_t mac_buffer[IV_SIZE + cipher_size];
+                uint8_t mac_buffer[1024];
                 uint8_t mac_digest[MAC_SIZE];
-                
-                // Create buffer with IV followed by ciphertext
-                memcpy(mac_buffer, iv, IV_SIZE);
-                memcpy(mac_buffer + IV_SIZE, ciphertext, cipher_size);
+                size_t mac_buffer_size = 0;
+                mac_buffer_size += serialize_tlv(mac_buffer, iv_tlv);
+                mac_buffer_size += serialize_tlv(mac_buffer + mac_buffer_size, cipher_tlv);
                 
                 // Compute HMAC
-                hmac(mac_digest, mac_buffer, IV_SIZE + cipher_size);
+                hmac(mac_digest, mac_buffer, mac_buffer_size);
                 add_val(mac_tlv, mac_digest, MAC_SIZE);
                 add_tlv(data_tlv, mac_tlv);
                 
@@ -419,26 +420,22 @@ void output_sec(uint8_t* buf, size_t length) {
         uint8_t* received_mac = mac_tlv->val;
         
         // Create buffer with IV followed by ciphertext for MAC verification
-        uint8_t mac_buffer[iv_tlv->length + cipher_tlv->length];
+        uint8_t mac_buffer[1024];
         uint8_t computed_mac[MAC_SIZE];
         
-        memcpy(mac_buffer, iv, iv_tlv->length);
-        memcpy(mac_buffer + iv_tlv->length, ciphertext, cipher_tlv->length);
+        size_t mac_buffer_size = 0;
+        mac_buffer_size += serialize_tlv(mac_buffer, iv_tlv);
+        mac_buffer_size += serialize_tlv(mac_buffer + mac_buffer_size, cipher_tlv);
+
         
         // Compute HMAC
-        hmac(computed_mac, mac_buffer, iv_tlv->length + cipher_tlv->length);
+        hmac(computed_mac, mac_buffer, mac_buffer_size);
         
         // Verify MAC
-
-        if (memcmp(computed_mac, received_mac, MAC_SIZE) != 0) {
+        if (mac_tlv->length != MAC_SIZE || memcmp(computed_mac, received_mac, MAC_SIZE) != 0) {
             fprintf(stderr, "Error: MAC verification failed\n");
             exit(5);  // Bad MAC
         }
-
-        // if (mac_tlv->length != MAC_SIZE || memcmp(computed_mac, received_mac, MAC_SIZE) != 0) {
-        //     fprintf(stderr, "Error: MAC verification failed\n");
-        //     exit(5);  // Bad MAC
-        // }
         
         // Decrypt data
         uint8_t plaintext[cipher_tlv->length];  // Plaintext will be smaller than ciphertext
